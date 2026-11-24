@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+release/
+coverage/
+tests/e2e/
+pnpm-lock.yaml
+docs/
+*.md
