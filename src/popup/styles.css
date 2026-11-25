@@ -76,6 +76,11 @@ body {
   margin: 0;
 }
 
+.gm-brand-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
 .gm-badge {
   display: inline-flex;
   align-items: center;
