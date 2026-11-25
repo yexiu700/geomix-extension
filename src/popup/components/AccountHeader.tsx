@@ -1,5 +1,6 @@
 import type { PublicPairingState } from '../../shared/storage';
 import { formatDateTime, formatHostLabel, getExtensionVersion } from '../runtime';
+import { BrandIcon } from './BrandIcon';
 
 export type AccountHeaderProps = {
   pairing: PublicPairingState;
@@ -16,6 +17,7 @@ export function AccountHeader({ pairing, unbinding, onUnbind }: AccountHeaderPro
     <header className="gm-card">
       <div className="gm-header-bar">
         <h1 className="gm-brand-title">
+          <BrandIcon size={20} />
           <span>GeoMix 渠道草稿助手</span>
           <span className="gm-badge gm-badge-version">v{version}</span>
         </h1>

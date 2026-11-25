@@ -7,6 +7,7 @@ import {
   formatPairingErrorMessage,
   getExtensionVersion,
 } from '../runtime';
+import { BrandIcon } from './BrandIcon';
 
 export type PairingViewProps = {
   notice?: { tone: 'info' | 'warn'; message: string } | null;
@@ -89,6 +90,7 @@ export function PairingView({ notice, onPaired }: PairingViewProps) {
       <section className="gm-card">
         <div className="gm-header-bar">
           <h1 className="gm-brand-title">
+            <BrandIcon size={20} />
             <span>GeoMix 渠道草稿助手</span>
             <span className="gm-badge gm-badge-version">v{version}</span>
           </h1>
