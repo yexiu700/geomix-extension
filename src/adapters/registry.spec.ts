@@ -96,9 +96,11 @@ describe('adapters/registry', () => {
       getAdapterByUrl('https://mp.toutiao.com/profile_v4/graphic/edit/%2e%2e'),
     ).toBeUndefined();
 
-    // SMZDM: editor & published article
+    // SMZDM: editor, /edit/<id> draft editor & published article
     expect(getAdapterByUrl('https://post.smzdm.com/tougao/')).toBe(smzdmAdapter);
     expect(getAdapterByUrl('https://post.smzdm.com/tougao/?draft_id=1')).toBe(smzdmAdapter);
+    expect(getAdapterByUrl('https://post.smzdm.com/edit/anvm0rv7')).toBe(smzdmAdapter);
+    expect(getAdapterByUrl('https://post.smzdm.com/edit/anvm0rv7/')).toBe(smzdmAdapter);
     expect(getAdapterByUrl('https://post.smzdm.com/p/aB12cD34')).toBe(smzdmAdapter);
   });
 

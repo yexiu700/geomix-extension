@@ -191,8 +191,15 @@ function releaseInFlightTabClaim(key: object, tabId: number, taskId: string): vo
   }
 }
 
+const SMZDM_DRAFT_EDIT_URL_PATTERN = /^https:\/\/post\.smzdm\.com\/edit\/[a-zA-Z0-9_-]+\/?$/i;
+
+function isSmzdmDraftEditUrl(rawUrl: string | undefined): rawUrl is string {
+  return typeof rawUrl === 'string' && SMZDM_DRAFT_EDIT_URL_PATTERN.test(rawUrl.trim());
+}
+
 async function openOrReuseEditorTab(
   targetUrl: string,
+  provider: ExtensionProviderKey,
   taskId: string,
   tabsApi: ChromeTabsApiLike,
   allocationKey: object,
@@ -246,15 +253,35 @@ async function openOrReuseEditorTab(
       if (typeof tab.url !== 'string') {
         return false;
       }
-      return normalizeUrlForTabMatch(tab.url) === targetKey;
+      const normalized = normalizeUrlForTabMatch(tab.url);
+      if (!normalized) {
+        return false;
+      }
+      if (normalized === targetKey) {
+        return true;
+      }
+      if (provider === 'SMZDM_EXT' && isSmzdmDraftEditUrl(normalized)) {
+        return true;
+      }
+      return false;
     });
 
     const sameTaskTabs = eligibleTabs.filter(
       (tab) => typeof tab.id === 'number' && boundToSameTaskTabIds.has(tab.id),
     );
+    const smzdmDirectEditTabs =
+      provider === 'SMZDM_EXT'
+        ? eligibleTabs.filter(
+            (tab) =>
+              typeof tab.url === 'string' &&
+              isSmzdmDraftEditUrl(normalizeUrlForTabMatch(tab.url) ?? undefined),
+          )
+        : [];
     const reusable =
       sameTaskTabs.find((tab) => tab.active === true) ??
       sameTaskTabs[0] ??
+      smzdmDirectEditTabs.find((tab) => tab.active === true) ??
+      smzdmDirectEditTabs[0] ??
       eligibleTabs.find((tab) => tab.active === true) ??
       eligibleTabs[0];
 
@@ -525,6 +552,7 @@ export async function dispatchDraftTask(
   const allocationKey = resolveTabAllocationKey(tabsApi, deps?.sessionStorageArea);
   const tabResult = await openOrReuseEditorTab(
     targetUrl,
+    validTask.provider,
     validTask.taskId,
     tabsApi,
     allocationKey,
@@ -636,34 +664,79 @@ export async function dispatchDraftTask(
     const pendingRecord = createPendingTabTaskFromDto(tabId, validTask);
     await setPendingTabTask(pendingRecord, deps?.sessionStorageArea);
 
-    let rawReport: unknown;
-    try {
-      const injectRequest: BackgroundToContentRequest = {
-        type: 'INJECT_DRAFT',
-        payload: { task: validTask },
-      };
-      rawReport = await tabsApi.sendMessage(tabId, injectRequest);
-    } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : '向编辑页派发草稿失败';
-      const report: DraftInjectReport = {
-        ok: false,
-        stage: 'EDITOR_NOT_FOUND',
-        uploadedImages: 0,
-        failedImages: 0,
-        message: redactSensitiveText(`向编辑页派发草稿失败：${detail}`),
-      };
-      await updatePendingTabTask(tabId, { lastInjectReport: report }, deps?.sessionStorageArea);
-      return {
-        taskId: validTask.taskId,
-        accepted: false,
-        stage: report.stage,
-        tabId,
-        message: report.message,
-        report,
-      };
+    const sendInjectDraft = async (): Promise<DraftInjectReport> => {
+      try {
+        const injectRequest: BackgroundToContentRequest = {
+          type: 'INJECT_DRAFT',
+          payload: { task: validTask },
+        };
+        const rawReport = await tabsApi.sendMessage(tabId, injectRequest);
+        return unwrapInjectDraftReport(rawReport);
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : '向编辑页派发草稿失败';
+        return {
+          ok: false,
+          stage: 'EDITOR_NOT_FOUND',
+          uploadedImages: 0,
+          failedImages: 0,
+          message: redactSensitiveText(`向编辑页派发草稿失败：${detail}`),
+        };
+      }
+    };
+
+    let report = await sendInjectDraft();
+
+    // SMZDM /tougao/ is a creator landing page whose `a.release-new` carries the real `/edit/<id>` URL.
+    if (
+      validTask.provider === 'SMZDM_EXT' &&
+      report.stage === 'EDITOR_NOT_FOUND' &&
+      isSmzdmDraftEditUrl(report.draftUrl)
+    ) {
+      const nextEditUrl = report.draftUrl;
+      await tabsApi.update(tabId, { url: nextEditUrl, active: true });
+      const navLoadResult = await waitForTabComplete(tabId, tabsApi, loadTimeoutMs);
+      if (!navLoadResult.ok) {
+        report = {
+          ok: false,
+          stage: 'EDITOR_NOT_FOUND',
+          uploadedImages: 0,
+          failedImages: 0,
+          message:
+            navLoadResult.reason === 'TAB_CLOSED'
+              ? '目标平台编辑页已关闭，请重新写入草稿箱。'
+              : '等待什么值得买文章编辑页加载超时，请确认页面可访问后重试。',
+        };
+      } else {
+        const navReadyResult = await waitForContentScriptReady(tabId, tabsApi, {
+          scriptingApi,
+          reused: false,
+          timeoutMs: pingTimeoutMs,
+          retryIntervalMs: pingRetryIntervalMs,
+        });
+        if (!navReadyResult.ok) {
+          report = {
+            ok: false,
+            stage: 'EDITOR_NOT_FOUND',
+            uploadedImages: 0,
+            failedImages: 0,
+            message: '什么值得买文章编辑页注入脚本未就绪，请刷新页面后重试。',
+          };
+        } else {
+          // Vue + TipTap editor on /edit/<id> may finish mounting shortly after document_idle
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            report = await sendInjectDraft();
+            if (report.stage !== 'AUTH_REQUIRED' && report.stage !== 'EDITOR_NOT_FOUND') {
+              break;
+            }
+            if (tabClosed || attempt === 9) {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 350));
+          }
+        }
+      }
     }
 
-    const report = unwrapInjectDraftReport(rawReport);
     const accepted = report.stage === 'INJECTED' || report.stage === 'PARTIAL_MEDIA_FAILED';
 
     await updatePendingTabTask(
