@@ -22,7 +22,8 @@ export const SMZDM_OPERATOR_REMINDERS: readonly string[] = [
   '请在发布前人工核对文末合规披露声明（含利益相关说明、体验来源与实测条件），确认无误后再手动提交。',
 ] as const;
 
-const SMZDM_EDITOR_PATH_PATTERN = /^\/tougao(?:\/.*)?$/;
+const SMZDM_EDITOR_PATH_PATTERN = /^\/(?:tougao|edit)(?:\/.*)?$/i;
+const SMZDM_DRAFT_EDIT_PATH_PATTERN = /^\/edit\/[a-zA-Z0-9_-]+\/?$/i;
 const LOGIN_PATH_SEGMENT_PATTERN = /\/(?:user\/)?(?:login|signin|passport|oauth|auth)(?:\/|$)/i;
 
 const HIDDEN_UTILITY_CLASSES: ReadonlySet<string> = new Set([
@@ -79,17 +80,23 @@ const LOGGED_IN_SHELL_SELECTOR = [
   '.smzdm-creator-header',
   '.creator-user-name',
   '.z-header-user',
+  '#global-nav .user-entry',
+  'a.release-new[href^="/edit/"]',
   '.user-avatar',
   '[data-smzdm-user]',
   '[data-auth-state="logged-in"]',
   '[data-logged-in="true"]',
   '[data-smzdm-editor]',
   '.smzdm-editor',
+  '.editor__content',
+  'textarea.article-title',
+  '.foot-main',
   '.tougao-editor',
   '.tougao-container',
 ].join(', ');
 
 const TITLE_INPUT_SELECTORS = [
+  'textarea.article-title',
   'input[data-smzdm-title]',
   'textarea[data-smzdm-title]',
   'input[name="title"]',
@@ -119,6 +126,8 @@ const FORBIDDEN_TITLE_INPUT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 const BODY_EDITOR_SELECTORS = [
+  '.editor__content .ProseMirror[contenteditable="true"]',
+  '.editor__content .ProseMirror[contenteditable=""]',
   '[data-smzdm-editor-body][contenteditable="true"]',
   '[data-smzdm-editor-body][contenteditable=""]',
   '.smzdm-editor-content[contenteditable="true"]',
@@ -3683,6 +3692,33 @@ function normalizeFailedDetails(
   ];
 }
 
+export function findSmzdmNewDraftEditUrl(doc: Document): string | null {
+  const candidates = Array.from(
+    doc.querySelectorAll<HTMLAnchorElement>('a.release-new[href], a[href^="/edit/"]'),
+  );
+  for (const anchor of candidates) {
+    const rawHref = anchor.getAttribute('href')?.trim();
+    if (!rawHref) {
+      continue;
+    }
+    let resolved: URL;
+    try {
+      resolved = new URL(rawHref, SMZDM_EDITOR_ENTRY_URL);
+    } catch {
+      continue;
+    }
+    if (
+      resolved.protocol === 'https:' &&
+      resolved.hostname.toLowerCase() === 'post.smzdm.com' &&
+      resolved.port === '' &&
+      SMZDM_DRAFT_EDIT_PATH_PATTERN.test(resolved.pathname)
+    ) {
+      return `${resolved.origin}${resolved.pathname.replace(/\/+$/, '')}`;
+    }
+  }
+  return null;
+}
+
 export function createSmzdmAdapter(): PlatformDraftAdapter {
   return {
     provider: 'SMZDM_EXT',
@@ -3729,6 +3765,17 @@ export function createSmzdmAdapter(): PlatformDraftAdapter {
       const titleInput = findTitleInput(doc);
       const bodyEditor = findBodyEditor(doc, titleInput);
       if (!titleInput || !bodyEditor) {
+        const draftEditUrl = findSmzdmNewDraftEditUrl(doc);
+        if (draftEditUrl) {
+          return {
+            ok: false,
+            stage: 'EDITOR_NOT_FOUND',
+            uploadedImages: 0,
+            failedImages: 0,
+            draftUrl: draftEditUrl,
+            message: '已定位什么值得买新建文章编辑页，正在自动跳转写入草稿。',
+          };
+        }
         return {
           ok: false,
           stage: 'EDITOR_NOT_FOUND',

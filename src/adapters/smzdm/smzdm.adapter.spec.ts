@@ -3059,5 +3059,63 @@ describe('smzdmAdapter (SMZDM_EXT)', () => {
       expect(mismatchReport.failedImages).toBe(1);
       expect(mismatchReport.operatorReminders).toEqual([...SMZDM_OPERATOR_REMINDERS]);
     });
+
+    it('supports live Vue + TipTap /edit/<id> DOM and extracts /edit/<id> link from /tougao/ landing page', async () => {
+      const landingDoc = document.implementation.createHTMLDocument('SMZDM Tougao');
+      landingDoc.body.innerHTML = `
+        <div id="global-nav"><a class="user-entry J_user_entry">测试值友</a></div>
+        <div class="published-articles">
+          <a href="/edit/demo1234" class="release-new">发布新文章</a>
+        </div>
+      `;
+      expect(
+        smzdmAdapter.isLoggedInEditor(landingDoc, new URL('https://post.smzdm.com/tougao/')),
+      ).toBe(true);
+      const task = createSyntheticSmzdmTask({ mediaAssets: [] });
+      const landingReport = await smzdmAdapter.injectDraft(landingDoc, task, {
+        uploadAll: vi.fn(async () => ({ uploadedImages: 0, failedImages: 0, failures: [] })),
+      });
+      expect(landingReport.ok).toBe(false);
+      expect(landingReport.stage).toBe('EDITOR_NOT_FOUND');
+      expect(landingReport.draftUrl).toBe('https://post.smzdm.com/edit/demo1234');
+
+      const editDoc = document.implementation.createHTMLDocument('SMZDM Edit');
+      editDoc.body.innerHTML = `
+        <div class="content-wrapper editor_content">
+          <div class="main-content">
+            <textarea class="article-title" placeholder="请输入文章标题" rows="2"></textarea>
+            <div class="editor__content">
+              <div class="ProseMirror z-editor--empty" contenteditable="true" data-placeholder="请输入正文"></div>
+            </div>
+          </div>
+        </div>
+        <div class="foot-main">
+          <p class="status">草稿将自动保存</p>
+          <div class="btn-groups">
+            <button type="button" class="el-button cancel-btn btn">预览</button>
+            <button type="button" class="el-button publish-btn btn">发布</button>
+          </div>
+        </div>
+      `;
+      expect(
+        smzdmAdapter.isLoggedInEditor(editDoc, new URL('https://post.smzdm.com/edit/demo1234')),
+      ).toBe(true);
+      let publishClicked = 0;
+      editDoc.querySelector('button.publish-btn')?.addEventListener('click', () => {
+        publishClicked += 1;
+      });
+      const editReport = await smzdmAdapter.injectDraft(editDoc, task, {
+        uploadAll: vi.fn(async () => ({ uploadedImages: 0, failedImages: 0, failures: [] })),
+      });
+      expect(editReport.ok).toBe(true);
+      expect(editReport.stage).toBe('INJECTED');
+      expect((editDoc.querySelector('textarea.article-title') as HTMLTextAreaElement).value).toBe(
+        task.variantTitle,
+      );
+      expect(
+        editDoc.querySelector('.editor__content .ProseMirror')?.textContent?.trim().length,
+      ).toBeGreaterThan(0);
+      expect(publishClicked).toBe(0);
+    });
   });
 });

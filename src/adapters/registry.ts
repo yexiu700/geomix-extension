@@ -22,6 +22,7 @@ export const DEFAULT_ADAPTERS: readonly PlatformDraftAdapter[] = [
 
 const ZHIHU_DRAFT_EDIT_PATH_PATTERN = /^\/p\/\d+\/edit\/?$/;
 const TOUTIAO_DRAFT_EDIT_PATH_PATTERN = /^\/profile_v4\/graphic\/edit(?:\/[a-zA-Z0-9_-]+)?\/?$/i;
+const SMZDM_DRAFT_EDIT_PATH_PATTERN = /^\/edit\/[a-zA-Z0-9_-]+\/?$/i;
 
 const adapterRegistry = new Map<ExtensionProviderKey, PlatformDraftAdapter>();
 
@@ -78,6 +79,14 @@ function matchesSecondaryEditorUrl(
     if (
       parsed.origin === 'https://mp.toutiao.com' &&
       TOUTIAO_DRAFT_EDIT_PATH_PATTERN.test(parsed.pathname)
+    ) {
+      return true;
+    }
+  }
+  if (provider === 'SMZDM_EXT') {
+    if (
+      parsed.origin === 'https://post.smzdm.com' &&
+      SMZDM_DRAFT_EDIT_PATH_PATTERN.test(parsed.pathname)
     ) {
       return true;
     }
