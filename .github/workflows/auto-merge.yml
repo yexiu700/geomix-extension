@@ -1,0 +1,127 @@
+name: Auto Merge
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: Enable Auto-Merge
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable native auto-merge when repository allows it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          OUTPUT=$(gh pr merge --auto --merge --delete-branch "$PR_URL" 2>&1) && {
+            echo "$OUTPUT"
+            exit 0
+          }
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -qi "auto merge is not allowed"; then
+            echo "Repository native auto-merge is disabled; merge-on-ci workflow_run will merge automatically after CI passes."
+            exit 0
+          fi
+
+          PR_INFO=$(gh pr view "$PR_URL" --json state,isDraft,mergeStateStatus)
+          STATE=$(echo "$PR_INFO" | jq -r .state)
+          IS_DRAFT=$(echo "$PR_INFO" | jq -r .isDraft)
+          MERGE_STATUS=$(echo "$PR_INFO" | jq -r .mergeStateStatus)
+
+          if [ "$STATE" != "OPEN" ] || [ "$IS_DRAFT" = "true" ]; then
+            echo "PR state is $STATE (isDraft=$IS_DRAFT); skipping auto-merge enablement."
+            exit 0
+          fi
+          if [ "$MERGE_STATUS" = "CLEAN" ]; then
+            echo "PR is already CLEAN; waiting for CI workflow_run to merge and trigger release."
+            exit 0
+          fi
+          echo "Auto-merge enablement deferred to workflow_run (state=$STATE, mergeStateStatus=$MERGE_STATUS)."
+          exit 0
+
+  merge-on-ci:
+    name: Merge PR After CI Green
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.merge.outputs.should_release }}
+    steps:
+      - name: Merge matching PR targeting main
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_PR_NUM: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
+          REPO: ${{ github.repository }}
+        run: |
+          SHOULD_RELEASE="false"
+          trap 'echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"' EXIT
+
+          PR_JSON=$(gh pr list --repo "$REPO" --state all --head "$HEAD_BRANCH" --base main --json number,state,isDraft,headRefOid --limit 10)
+          PR_NUM=$(echo "$PR_JSON" | jq -r --arg sha "$HEAD_SHA" '.[] | select(.headRefOid == $sha and (.isDraft | not)) | .number' | head -n 1)
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            PR_NUM=$(echo "$PR_JSON" | jq -r '.[] | select(.state == "OPEN" and (.isDraft | not)) | .number' | head -n 1)
+          fi
+          if ( [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ] ) && [ -n "$EVENT_PR_NUM" ]; then
+            PR_NUM="$EVENT_PR_NUM"
+          fi
+          if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
+            echo "No non-draft PR targeting main found for branch $HEAD_BRANCH ($HEAD_SHA)."
+            exit 0
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            PR_VIEW=$(gh pr view "$PR_NUM" --repo "$REPO" --json state,mergeStateStatus)
+            STATE=$(echo "$PR_VIEW" | jq -r .state)
+            MERGE_STATUS=$(echo "$PR_VIEW" | jq -r .mergeStateStatus)
+            if [ "$STATE" = "MERGED" ]; then
+              echo "PR #$PR_NUM is already merged. Scheduling extension release."
+              SHOULD_RELEASE="true"
+              exit 0
+            fi
+            if [ "$STATE" != "OPEN" ]; then
+              echo "PR #$PR_NUM state is $STATE; skipping."
+              exit 0
+            fi
+            if [ "$MERGE_STATUS" = "DIRTY" ]; then
+              echo "PR #$PR_NUM has merge conflicts (DIRTY); skipping auto-merge."
+              exit 0
+            fi
+            if gh pr merge "$PR_NUM" --repo "$REPO" --merge --delete-branch; then
+              echo "Merged PR #$PR_NUM. Scheduling extension release."
+              SHOULD_RELEASE="true"
+              exit 0
+            fi
+            sleep 3
+          done
+
+          STATE=$(gh pr view "$PR_NUM" --repo "$REPO" --json state --jq .state)
+          if [ "$STATE" = "MERGED" ]; then
+            SHOULD_RELEASE="true"
+          fi
+
+  release-after-merge:
+    needs: merge-on-ci
+    if: needs.merge-on-ci.outputs.should_release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      ref: main
+    secrets: inherit

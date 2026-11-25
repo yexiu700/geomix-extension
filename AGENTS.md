@@ -22,6 +22,7 @@
 ### 2. Git、PR 与 CI 纪律
 
 - 仓库初始化提交完成后，所有开发均从最新 `origin/main` 拉出独立功能分支（如 `feat/batch-0-scaffold`、`feat/adapter-zhihu`）并通过 Pull Request 交付，**严禁直接推 `main`**。
+- **自动合并与自动 Release 须知**：本仓库已配置 `.github/workflows/auto-merge.yml` 与 `.github/workflows/release.yml`——**非草稿（Ready）PR 在 CI 全绿后会被自动合入 `main`，并自动打包 `geomix-extension-v<version>.zip` + `SHA256SUMS.txt` 发布/更新至 GitHub Releases**。未完成或需人工前置评审的 PR 务必先用 `gh pr create --draft` 创建。
 - 推荐技术栈固定：`pnpm` + `Vite` + `@crxjs/vite-plugin`（或等价轻量 MV3 构建配置）+ `TypeScript (strict)` + `React 19` + `Vitest` + `ESLint / Prettier`。
 - 每个 PR 合入前必须通过：
   ```bash
