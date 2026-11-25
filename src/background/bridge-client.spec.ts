@@ -482,4 +482,26 @@ describe('bridge-client', () => {
       await expect(okClient.getMe()).resolves.toEqual(DEMO_ME);
     }
   });
+
+  it('binds globalThis.fetch to globalThis so Chrome ServiceWorker fetch never throws Illegal invocation', async () => {
+    const originalFetch = globalThis.fetch;
+    const strictNativeFetch = function (this: unknown) {
+      if (this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'WorkerGlobalScope': Illegal invocation");
+      }
+      return Promise.resolve(makeJsonResponse({ code: 0, msg: 'ok', data: DEMO_ME }));
+    } as unknown as typeof fetch;
+
+    globalThis.fetch = strictNativeFetch;
+    try {
+      const client = createBridgeClient({
+        baseUrl: DEMO_BASE_URL,
+        token: DEMO_TOKEN,
+        extensionVersion: '0.1.0',
+      });
+      await expect(client.getMe()).resolves.toEqual(DEMO_ME);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

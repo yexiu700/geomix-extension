@@ -272,7 +272,9 @@ export class BridgeClient {
       throw new BridgeError('INVALID_INPUT', '扩展版本号无效');
     }
 
-    const fetchFn = options.fetchImpl ?? globalThis.fetch;
+    const fetchFn =
+      options.fetchImpl ??
+      (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined);
     if (typeof fetchFn !== 'function') {
       throw new BridgeError('NETWORK_ERROR', '当前运行环境不支持 fetch 网络请求');
     }
@@ -394,7 +396,8 @@ export class BridgeClient {
       };
 
       try {
-        response = await this.#fetch(`${this.#baseUrl}${params.path}`, {
+        const fetchFn = this.#fetch;
+        response = await fetchFn(`${this.#baseUrl}${params.path}`, {
           method: params.method,
           headers,
           body: params.body,
