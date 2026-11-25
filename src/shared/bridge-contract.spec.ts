@@ -83,6 +83,38 @@ describe('bridge-contract', () => {
         brands: [],
       }).success,
     ).toBe(false);
+
+    // Real GeoMix v2.2 server Bridge v1 payload shape (#9)
+    const serverMe = ExtensionMeDtoSchema.parse({
+      bridgeVersion: 'v1',
+      userDisplayName: 'op***r',
+      tokenLabel: '办公电脑 Chrome',
+      tokenPrefix: 'gmext_123456',
+      expiresAt: '2026-12-31T23:59:59.000Z',
+      brands: [
+        {
+          id: 'brand_cn_1',
+          name: 'NordicAudio',
+          localBrandName: '北境声学',
+          category: '开放式运动耳机',
+          market: 'CN',
+        },
+      ],
+    });
+    expect(serverMe).toEqual({
+      nickname: 'op***r',
+      tokenLabel: '办公电脑 Chrome',
+      tokenPrefix: 'gmext_123456',
+      expiresAt: '2026-12-31T23:59:59.000Z',
+      brands: [
+        {
+          brandId: 'brand_cn_1',
+          brandName: 'NordicAudio',
+          brandMarketId: 'brand_cn_1:CN',
+          localBrandName: '北境声学',
+        },
+      ],
+    });
   });
 
   it('validates ExtensionPendingTaskDto across all 3 providers, 4 statuses, and payload shapes', () => {
@@ -114,6 +146,55 @@ describe('bridge-contract', () => {
     const wrappedItems = ExtensionTasksPayloadSchema.parse({ items: [smzdmTask] });
     expect(wrappedItems).toHaveLength(1);
     expect(wrappedItems[0]?.taskId).toBe('task_demo_3');
+
+    // Real GeoMix v2.2 server /api/v2/extension/tasks payload shape (#9)
+    const serverWrapped = ExtensionTasksPayloadSchema.parse({
+      bridgeVersion: 'v1',
+      items: [
+        {
+          taskId: 'task_srv_1',
+          articleId: 'art_srv_1',
+          brandId: 'brand_cn_1',
+          brandName: '北境声学',
+          provider: 'ZHIHU_EXT',
+          channelLabel: '知乎',
+          status: 'READY_TO_PUBLISH',
+          variantTitle: '北境声学实测评测',
+          variantMarkdown: '# 标题',
+          variantHtml: '<h1>标题</h1>',
+          targetUrlHint: null,
+          mediaAssets: [
+            {
+              id: 'media_1',
+              title: '实拍主图',
+              url: 'https://cdn.example.com/1.jpg',
+              mime: null,
+            },
+          ],
+          antiBanChecklist: ['人工复核后再发布'],
+          remotePublishedUrl: null,
+          updatedAt: '2026-06-01T10:00:00.000Z',
+        },
+      ],
+    });
+    expect(serverWrapped).toHaveLength(1);
+    expect(serverWrapped[0]?.complianceChecklist).toEqual(['人工复核后再发布']);
+    expect(serverWrapped[0]?.mediaAssets).toEqual([
+      { url: 'https://cdn.example.com/1.jpg', alt: '实拍主图' },
+    ]);
+
+    // Real GeoMix v2.2 server /confirm-published payload shape (#9)
+    const serverConfirm = ExtensionConfirmPublishedResultSchema.parse({
+      accepted: true,
+      taskId: 'task_srv_1',
+      publishRecordId: 'pub_srv_1',
+      publishedUrl: 'https://zhuanlan.zhihu.com/p/123456789',
+      status: 'PUBLISHED',
+      alreadyRecorded: false,
+      retestScheduledCount: 3,
+    });
+    expect(serverConfirm.crawlProbeQueued).toBe(true);
+    expect(serverConfirm.retestMilestones).toEqual([7, 14, 30]);
 
     expect(
       ExtensionPendingTaskDtoSchema.safeParse({
