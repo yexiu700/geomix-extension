@@ -1,0 +1,172 @@
+name: Release Extension
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to build and release'
+        required: false
+        type: string
+        default: 'main'
+      tag:
+        description: 'Optional release tag override (defaults to v<package.json version>)'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional release tag override (defaults to v<package.json version>)'
+        required: false
+        type: string
+        default: ''
+      prerelease:
+        description: 'Mark release as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  pack-and-release:
+    name: Build, Verify & Publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify lint, typecheck, build, and tests
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm build
+          pnpm test
+
+      - name: Pack Chrome extension ZIP & SHA256 checksum
+        id: pack
+        run: |
+          pnpm run pack
+          VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version")
+          ZIP_NAME="geomix-extension-v${VERSION}.zip"
+          ZIP_PATH="release/${ZIP_NAME}"
+          if [ ! -f "$ZIP_PATH" ]; then
+            echo "Expected package not found: $ZIP_PATH"
+            exit 1
+          fi
+          (cd release && sha256sum "$ZIP_NAME" > SHA256SUMS.txt)
+          SHA256=$(awk '{print $1}' release/SHA256SUMS.txt)
+          TARGET_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+              TAG="${GITHUB_REF_NAME}"
+            else
+              TAG="v${VERSION}"
+            fi
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "zip_name=${ZIP_NAME}"
+            echo "zip_path=${ZIP_PATH}"
+            echo "sha256=${SHA256}"
+            echo "target_sha=${TARGET_SHA}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+          cat > release/RELEASE_NOTES.md <<EOF
+          ## GeoMix 渠道草稿助手 ${TAG}
+
+          - **版本**：\`v${VERSION}\`
+          - **构建提交**：\`${SHORT_SHA}\`（\`${TARGET_SHA}\`）
+          - **产物文件**：\`${ZIP_NAME}\`
+          - **SHA-256**：\`${SHA256}\`
+
+          ### Chrome 本地安装方式
+          1. 下载下方 \`${ZIP_NAME}\` 并解压到本地目录；
+          2. 打开 \`chrome://extensions\` 并启用右上角「开发者模式」；
+          3. 点击「加载已解压的扩展程序」，选择解压后的目录（含 \`manifest.json\`）；
+          4. 打开扩展填入 GeoMix 实例 HTTPS 地址与控制台生成的 \`gmext_\` 配对 Token 即可使用。
+
+          ### 最近变更
+          $(git log -n 10 --pretty=format:'- %s (%h)')
+          EOF
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geomix-extension-${{ steps.pack.outputs.tag }}
+          path: |
+            ${{ steps.pack.outputs.zip_path }}
+            release/SHA256SUMS.txt
+          retention-days: 30
+
+      - name: Publish or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.pack.outputs.tag }}
+          TARGET_SHA: ${{ steps.pack.outputs.target_sha }}
+          ZIP_PATH: ${{ steps.pack.outputs.zip_path }}
+          PRERELEASE: ${{ inputs.prerelease || false }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Updating existing release ${TAG} to ${TARGET_SHA}..."
+            git tag -f "$TAG" "$TARGET_SHA"
+            git push -f origin "refs/tags/${TAG}"
+            gh release upload "$TAG" "$ZIP_PATH" "release/SHA256SUMS.txt" --repo "$REPO" --clobber
+            gh release edit "$TAG" \
+              --repo "$REPO" \
+              --title "GeoMix 渠道草稿助手 ${TAG}" \
+              --notes-file release/RELEASE_NOTES.md
+          else
+            echo "Creating new release ${TAG} at ${TARGET_SHA}..."
+            CREATE_ARGS=(
+              "$TAG"
+              "$ZIP_PATH"
+              "release/SHA256SUMS.txt"
+              --repo "$REPO"
+              --target "$TARGET_SHA"
+              --title "GeoMix 渠道草稿助手 ${TAG}"
+              --notes-file release/RELEASE_NOTES.md
+            )
+            if [ "$PRERELEASE" = "true" ]; then
+              CREATE_ARGS+=(--prerelease)
+            else
+              CREATE_ARGS+=(--latest)
+            fi
+            gh release create "${CREATE_ARGS[@]}"
+          fi
