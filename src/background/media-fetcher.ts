@@ -406,7 +406,9 @@ async function fetchSingleAssetUnthrottled(
     options.maxRedirects >= 0
       ? Math.floor(options.maxRedirects)
       : MAX_MEDIA_REDIRECTS;
-  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const fetchImpl =
+    options.fetchImpl ??
+    (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined);
 
   if (typeof fetchImpl !== 'function') {
     return buildFailure(asset, 'NETWORK_ERROR', '当前运行环境不支持图片网络拉取');
