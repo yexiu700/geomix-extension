@@ -3071,7 +3071,7 @@ describe('smzdmAdapter (SMZDM_EXT)', () => {
       expect(
         smzdmAdapter.isLoggedInEditor(landingDoc, new URL('https://post.smzdm.com/tougao/')),
       ).toBe(true);
-      const task = createSyntheticSmzdmTask({ mediaAssets: [] });
+      const task = createSmzdmTaskFixture({ mediaAssets: [] });
       const landingReport = await smzdmAdapter.injectDraft(landingDoc, task, {
         uploadAll: vi.fn(async () => ({ uploadedImages: 0, failedImages: 0, failures: [] })),
       });
